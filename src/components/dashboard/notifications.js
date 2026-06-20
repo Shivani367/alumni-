@@ -39,30 +39,38 @@ const Notifications = () => {
   }, []);
 
   return (
-    <div className="p-8 bg-gradient-to-b from-gray-100 to-gray-300 min-h-screen">
-      <h1 className="text-4xl font-extrabold mb-10 text-gray-800">Notifications</h1>
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-extrabold text-slate-800">Notifications</h1>
+      </div>
   
       {notifications.length > 0 ? (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {notifications.map((notification) => (
             <div
               key={notification.id}
-              className="p-6 border border-gray-200 rounded-xl shadow-lg bg-white"
+              className="p-6 border border-slate-200 rounded-2xl shadow-sm bg-white hover:shadow-md transition-shadow duration-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
             >
-              <h2 className="text-xl font-semibold text-gray-800">{notification.title}</h2>
-              <p className="text-gray-600 mt-2">{notification.message}</p>
-              <p className="text-sm text-gray-500 mt-1">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-teal-500 animate-pulse"></span>
+                  <h2 className="text-lg font-bold text-slate-800">{notification.title}</h2>
+                </div>
+                <p className="text-slate-600 text-sm">{notification.message}</p>
+              </div>
+              <div className="text-xs text-slate-400 font-semibold whitespace-nowrap bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
                 {new Date(notification.created_at).toLocaleString()}
-              </p>
+              </div>
             </div>
           ))}
         </div>
       ) : (
-        <p className="text-gray-500">No notifications found.</p>
+        <div className="text-center py-12 bg-white border border-slate-200 rounded-2xl">
+          <p className="text-slate-400">No new notifications.</p>
+        </div>
       )}
     </div>
   );
-  
 };
 
 export default Notifications;

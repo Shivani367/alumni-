@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getSession } from '../../services/authService';
-import { deleteContent, listContent, saveContent } from '../../services/contentService';
+import supabase from '../../supabaseClient';
 
 const Blogs = () => {
   const [blogs, setBlogs] = useState([]); // Store all blogs for the current user
@@ -16,40 +15,67 @@ const Blogs = () => {
   }, [userEmail]);
 
   const fetchUserEmail = async () => {
-    const session = await getSession();
-    if (session?.user) setUserEmail(session.user.email);
+    const { data: { session }, error } = await supabase.auth.getSession();
+
+    if (error) {
+      console.error('Error fetching user session:', error);
+    } else if (session?.user) {
+      setUserEmail(session.user.email); // Set user email from session
+    }
   };
 
   const fetchBlogs = async () => {
     if (!userEmail) return;
-    setBlogs(await listContent('blogs', userEmail));
+    const { data, error } = await supabase
+      .from('blogs')
+      .select('*')
+      .eq('email_id', userEmail)
+      .order('created_at', { ascending: false });
+
+    if (error) console.error('Error fetching blogs:', error);
+    else setBlogs(data);
   };
 
   const handleCreateBlog = async () => {
-    if (!title.trim() || !content.trim()) return;
-    try {
-      await saveContent('blogs', { title, excerpt, content, email_id: userEmail });
+    const { error } = await supabase
+      .from('blogs')
+      .insert([{ title, excerpt, content, email_id: userEmail }]);
+
+    if (error) console.error('Error creating blog:', error);
+    else {
       setTitle('');
       setExcerpt('');
       setContent('');
       fetchBlogs();
-    } catch (error) { console.error('Error creating blog:', error); }
+    }
   };
 
   const handleEditBlog = async () => {
-    try {
-      await saveContent('blogs', { title, excerpt, content }, editBlogId);
+    const { error } = await supabase
+      .from('blogs')
+      .update({ title, excerpt, content })
+      .eq('id', editBlogId)
+      .eq('email_id', userEmail);
+
+    if (error) console.error('Error updating blog:', error);
+    else {
       setTitle('');
       setExcerpt('');
       setContent('');
       setEditBlogId(null);
       fetchBlogs();
-    } catch (error) { console.error('Error updating blog:', error); }
+    }
   };
 
   const handleDeleteBlog = async (id) => {
-    await deleteContent('blogs', id);
-    fetchBlogs();
+    const { error } = await supabase
+      .from('blogs')
+      .delete()
+      .eq('id', id)
+      .eq('email_id', userEmail);
+
+    if (error) console.error('Error deleting blog:', error);
+    else fetchBlogs();
   };
 
   const handleLoadBlog = (blog) => {
@@ -60,66 +86,77 @@ const Blogs = () => {
   };
 
   return (
-    <div className="p-8 bg-gradient-to-b from-gray-100 to-gray-300 min-h-screen">
-      <h1 className="text-4xl font-extrabold mb-10 text-gray-800">Blogs</h1>
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-extrabold text-slate-800">Manage Blogs</h1>
+      </div>
   
-      <div className="bg-white shadow-xl rounded-xl p-8 mb-10">
-        <h2 className="text-2xl font-semibold mb-6 text-gray-700">
-          {editBlogId ? 'Edit Blog' : 'Create Blog'}
+      <div className="bg-white shadow-sm border border-slate-200 rounded-2xl p-6">
+        <h2 className="text-lg font-bold mb-4 text-slate-700">
+          {editBlogId ? 'Edit Blog Post' : 'Write a New Blog Post'}
         </h2>
-        <input
-          type="text"
-          placeholder="Title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full mb-4 p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-        />
-        <input
-          type="text"
-          placeholder="Excerpt"
-          value={excerpt}
-          onChange={(e) => setExcerpt(e.target.value)}
-          className="w-full mb-4 p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-        />
-        <textarea
-          placeholder="Content"
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="w-full mb-4 p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
-        />
-        <button
-          onClick={editBlogId ? handleEditBlog : handleCreateBlog}
-          className="w-full py-2 px-4 bg-teal-500 text-white rounded-lg font-semibold hover:bg-teal-600 transition duration-300 ease-in-out"
-        >
-          {editBlogId ? 'Update Blog' : 'Create Blog'}
-        </button>
+        <div className="space-y-4">
+          <input
+            type="text"
+            placeholder="Blog Title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all duration-150"
+          />
+          <input
+            type="text"
+            placeholder="Short Excerpt"
+            value={excerpt}
+            onChange={(e) => setExcerpt(e.target.value)}
+            className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all duration-150"
+          />
+          <textarea
+            placeholder="Write your content here..."
+            value={content}
+            rows="5"
+            onChange={(e) => setContent(e.target.value)}
+            className="w-full p-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 transition-all duration-150"
+          />
+          <button
+            onClick={editBlogId ? handleEditBlog : handleCreateBlog}
+            className="w-full py-3 px-4 bg-teal-600 text-white rounded-xl font-semibold hover:bg-teal-700 active:scale-[0.98] transition duration-200 shadow-sm"
+          >
+            {editBlogId ? 'Update Post' : 'Publish Post'}
+          </button>
+        </div>
       </div>
   
       <div>
-        <h2 className="text-2xl font-semibold mb-6 text-gray-700">Your Blogs</h2>
+        <h2 className="text-xl font-bold mb-4 text-slate-800">Your Published Blogs</h2>
         {blogs.length > 0 ? (
-          blogs.map((blog) => (
-            <div key={blog.id} className="mb-6 p-6 bg-white rounded-xl shadow-lg">
-              <h3 className="text-xl font-semibold text-gray-800">{blog.title}</h3>
-              <p className="text-gray-600 mt-2 mb-5">{blog.excerpt}</p>
-              <div className="flex space-x-4">
-                <button
-                  onClick={() => handleLoadBlog(blog)}
-                  className="py-2 px-4 bg-yellow-400 text-white rounded-lg font-semibold hover:bg-yellow-500 transition duration-300 ease-in-out"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDeleteBlog(blog.id)}
-                  className="py-2 px-4 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition duration-300 ease-in-out"
-                >
-                  Delete
-                </button>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {blogs.map((blog) => (
+              <div key={blog.id} className="p-6 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-shadow duration-200 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800 line-clamp-2">{blog.title}</h3>
+                  <p className="text-slate-500 text-sm mt-2 line-clamp-3 mb-6">{blog.excerpt}</p>
+                </div>
+                <div className="flex space-x-3 pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => handleLoadBlog(blog)}
+                    className="flex-1 py-2 px-3 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl font-semibold hover:bg-amber-100 transition duration-150"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleDeleteBlog(blog.id)}
+                    className="flex-1 py-2 px-3 bg-red-50 text-red-600 border border-red-100 rounded-xl font-semibold hover:bg-red-100 transition duration-150"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
-            </div>
-          ))
+            ))}
+          </div>
         ) : (
-          <p className="text-gray-500">No blogs found.</p>
+          <div className="text-center py-12 bg-white border border-slate-200 rounded-2xl">
+            <p className="text-slate-400">No blog posts found. Write your first post above!</p>
+          </div>
         )}
       </div>
     </div>
