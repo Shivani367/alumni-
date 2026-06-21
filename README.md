@@ -4,7 +4,7 @@ Alumni Connect is a premium, web-based networking portal designed to bridge the 
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 The platform is built using a modern, decoupled architecture designed for speed, portability, and ease of local deployment:
 
@@ -21,7 +21,7 @@ The platform is built using a modern, decoupled architecture designed for speed,
 
 ---
 
-## 🔄 Project Workflow
+## Project Workflow
 
 The application operates through a unified, secure flow:
 
@@ -69,7 +69,7 @@ Blogs / Events / Jobs (Public Views)
 
 ---
 
-## 🚀 Setup & Installation
+## Setup & Installation
 
 Follow these steps to run the frontend and backend servers concurrently on your machine:
 
@@ -105,7 +105,7 @@ npm run dev
 
 ---
 
-## 👥 Demo Accounts
+##  Demo Accounts
 
 The database comes pre-seeded with four default accounts representing different alumni and student profiles. You can use these credentials to log in and test the chat and referral systems immediately:
 
