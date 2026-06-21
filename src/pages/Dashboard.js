@@ -1,5 +1,5 @@
+// src/pages/Dashboard.js
 import React, { useEffect, useState } from 'react';
-import supabase from '../supabaseClient';
 import { getSession, signOut, authMode } from '../services/authService';
 import { useNavigate } from 'react-router-dom';
 import Blogs from '../components/dashboard/blog';
@@ -21,11 +21,11 @@ const Dashboard = () => {
         if (session?.user) {
           setUser(session.user);
         } else {
-          navigate('/');
+          navigate('/auth');
         }
       } catch (error) {
         console.error('Error fetching session:', error);
-        navigate('/');
+        navigate('/auth');
       }
     };
 
@@ -35,21 +35,12 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchTables = async () => {
       if (user) {
-        if (authMode === 'supabase') {
-          const { data, error } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', user.id);
-
-          if (error) {
-            console.error('Error fetching data:', error);
-          } else {
-            setTables(data);
-          }
-        } else {
-          // Local fallback
-          setTables([{ id: user.id, name: user.user_metadata?.name || 'Local User', status: user.user_metadata?.status || 'Member' }]);
-        }
+        // Backend / Local profile parsing
+        setTables([{ 
+          id: user.id, 
+          name: user.user_metadata?.name || 'Alumni Member', 
+          status: user.user_metadata?.status || 'Member' 
+        }]);
       }
     };
 
@@ -113,7 +104,7 @@ const Dashboard = () => {
     <div className="flex min-h-screen bg-slate-50 font-sans">
       {/* Sidebar */}
       <aside className="w-64 bg-[#004d40] text-white flex flex-col shadow-xl z-10">
-        <div className="p-6 border-b border-teal-800">
+        <div className="p-6 border-b border-teal-850">
           <h1 className="text-2xl font-bold tracking-wide">EEC Portal</h1>
           <p className="text-xs text-teal-300 mt-1">Alumni Connect Dashboard</p>
         </div>
@@ -184,3 +175,4 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
+export { authMode };

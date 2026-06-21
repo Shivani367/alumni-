@@ -1,98 +1,46 @@
+// src/components/chat/UserList.js
 import React, { useEffect, useState } from 'react';
-import supabase from '../../supabaseClient';
-import { authMode } from '../../services/authService';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const TOKEN_KEY = 'alumni-connect-token';
 
 function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
   const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const fetchUsersWithUnreadCount = async () => {
-    let data;
-    if (authMode === 'supabase') {
-      const { data: profiles, error } = await supabase
-        .from('profiles')
-        .select('id, email, name, status');
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token || !currentUser) return;
 
-      if (error) {
-        console.error('Error fetching users:', error);
-        return;
-      }
-      data = profiles;
-    } else {
-      const accounts = JSON.parse(localStorage.getItem('alumni-connect-accounts') || '[]');
-      data = accounts.map((acc) => ({
-        id: acc.id,
-        email: acc.email,
-        name: acc.profile?.name,
-        status: acc.profile?.status,
-      }));
-    }
-
-    // Filter out the current user
-    const filteredUsers = data.filter((user) => user.id !== currentUser?.id);
-
-    // Fetch unread message count for each user
-    const usersWithUnreadCount = await Promise.all(
-      filteredUsers.map(async (user) => {
-        let count = 0;
-        if (authMode === 'supabase') {
-          const { count: unreadCount, error: unreadError } = await supabase
-            .from('messages')
-            .select('id', { count: 'exact' })
-            .eq('sender_id', user.id)
-            .eq('receiver_id', currentUser.id)
-            .eq('is_read', false);
-
-          if (unreadError) {
-            console.error(`Error fetching unread count for user ${user.id}:`, unreadError);
-          }
-          count = unreadCount || 0;
-        } else {
-          const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
-          count = allLocalMessages.filter(
-            (m) => m.sender_id === user.id && m.receiver_id === currentUser.id && !m.is_read
-          ).length;
+    try {
+      const response = await fetch(`${API_URL}/api/users`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         }
+      });
 
-        return {
-          ...user,
-          unread_count: count,
-        };
-      })
-    );
-
-    setUsers(usersWithUnreadCount);
+      if (response.ok) {
+        const data = await response.json();
+        setUsers(data);
+      }
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     fetchUsersWithUnreadCount();
 
-    if (!currentUser?.id) return;
+    // Poll for updates (e.g. unread counts, new users) every 3 seconds
+    const interval = setInterval(() => {
+      fetchUsersWithUnreadCount();
+    }, 3000);
 
-    if (authMode === 'supabase') {
-      // Real-time channel to listen to any insert or update on the messages table to update unread counts
-      const channel = supabase
-        .channel('public:messages_unread_list')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'messages' },
-          (payload) => {
-            fetchUsersWithUnreadCount();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    } else {
-      const handleStorageChange = () => {
-        fetchUsersWithUnreadCount();
-      };
-      window.addEventListener('storage', handleStorageChange);
-      return () => {
-        window.removeEventListener('storage', handleStorageChange);
-      };
-    }
+    return () => clearInterval(interval);
   }, [currentUser]);
 
   const getAvatarColor = (name) => {
@@ -117,7 +65,11 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
         <p className="text-xs text-slate-400 font-semibold mt-1">Connect with Alumni & Students</p>
       </div>
       <div className="flex-grow overflow-y-auto p-3 space-y-1">
-        {users.length > 0 ? (
+        {loading && users.length === 0 ? (
+          <div className="flex justify-center py-8">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-teal-500"></div>
+          </div>
+        ) : users.length > 0 ? (
           users.map((user) => {
             const isSelected = selectedReceiverId === user.id;
             const initials = user.name ? user.name.charAt(0).toUpperCase() : '?';
@@ -129,7 +81,7 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
                 onClick={() => setReceiverId(user.id)}
                 className={`w-full text-left p-3 rounded-xl flex items-center transition-all duration-150 border ${
                   isSelected
-                    ? 'bg-teal-55 text-teal-900 border-teal-150 shadow-sm'
+                    ? 'bg-teal-50 text-teal-900 border-teal-150 shadow-sm'
                     : 'bg-transparent text-slate-700 border-transparent hover:bg-slate-200/50 hover:text-slate-900'
                 }`}
               >
@@ -146,7 +98,7 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
 
                 {/* Unread count badge */}
                 {user.unread_count > 0 && (
-                  <span className="bg-rose-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full shadow-sm">
+                  <span className="bg-rose-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full shadow-sm animate-bounce">
                     {user.unread_count}
                   </span>
                 )}

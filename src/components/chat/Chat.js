@@ -1,7 +1,10 @@
+// src/components/chat/Chat.js
 import React, { useEffect, useState, useRef } from 'react';
-import supabase from '../../supabaseClient';
-import { getSession, authMode } from '../../services/authService';
+import { getSession } from '../../services/authService';
 import UserList from './UserList';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const TOKEN_KEY = 'alumni-connect-token';
 
 function Chat() {
   const [messages, setMessages] = useState([]);
@@ -29,22 +32,27 @@ function Chat() {
   useEffect(() => {
     const fetchReceiverProfile = async () => {
       if (!receiverId) return;
-      if (authMode === 'supabase') {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', receiverId)
-          .single();
-        
-        if (!error) {
-          setReceiverProfile(data);
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) return;
+
+      try {
+        // Fetch user from /api/users to find receiver info
+        const response = await fetch(`${API_URL}/api/users`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          const usersList = await response.json();
+          const found = usersList.find(u => u.id === receiverId);
+          if (found) {
+            setReceiverProfile({ id: found.id, name: found.name, status: found.status });
+          }
         }
-      } else {
-        const accounts = JSON.parse(localStorage.getItem('alumni-connect-accounts') || '[]');
-        const acc = accounts.find((a) => a.id === receiverId);
-        if (acc) {
-          setReceiverProfile({ id: acc.id, name: acc.profile?.name, status: acc.profile?.status });
-        }
+      } catch (err) {
+        console.error('Error fetching receiver profile:', err);
       }
     };
     fetchReceiverProfile();
@@ -52,68 +60,25 @@ function Chat() {
 
   const fetchMessages = async () => {
     if (!user?.id || !receiverId) return;
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
 
-    if (authMode === 'supabase') {
-      try {
-        const { data: sentMessages, error: sentError } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('sender_id', user.id)
-          .eq('receiver_id', receiverId)
-          .order('created_at', { ascending: true });
-
-        if (sentError) throw sentError;
-
-        const { data: receivedMessages, error: receivedError } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('sender_id', receiverId)
-          .eq('receiver_id', user.id)
-          .order('created_at', { ascending: true });
-
-        if (receivedError) throw receivedError;
-
-        const allMessages = [...sentMessages, ...receivedMessages].sort(
-          (a, b) => new Date(a.created_at) - new Date(b.created_at)
-        );
-
-        setMessages(allMessages);
-        setIsChatEmpty(allMessages.length === 0);
-
-        // Mark received messages as read
-        await supabase
-          .from('messages')
-          .update({ is_read: true })
-          .eq('sender_id', receiverId)
-          .eq('receiver_id', user.id)
-          .eq('is_read', false);
-      } catch (err) {
-        console.error('Error fetching messages:', err);
-      }
-    } else {
-      const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
-      const filtered = allLocalMessages.filter(
-        (m) =>
-          (m.sender_id === user.id && m.receiver_id === receiverId) ||
-          (m.sender_id === receiverId && m.receiver_id === user.id)
-      );
-
-      setMessages(filtered);
-      setIsChatEmpty(filtered.length === 0);
-
-      // Local mark as read
-      let updated = false;
-      const updatedMessages = allLocalMessages.map((m) => {
-        if (m.sender_id === receiverId && m.receiver_id === user.id && !m.is_read) {
-          updated = true;
-          return { ...m, is_read: true };
+    try {
+      const response = await fetch(`${API_URL}/api/messages?receiverId=${receiverId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         }
-        return m;
       });
-      if (updated) {
-        localStorage.setItem('alumni-connect-messages', JSON.stringify(updatedMessages));
-        window.dispatchEvent(new Event('storage'));
+
+      if (response.ok) {
+        const data = await response.json();
+        setMessages(data);
+        setIsChatEmpty(data.length === 0);
       }
+    } catch (err) {
+      console.error('Error fetching messages:', err);
     }
   };
 
@@ -122,52 +87,12 @@ function Chat() {
 
     if (!user?.id || !receiverId) return;
 
-    if (authMode === 'supabase') {
-      // Real-time subscription to the messages table
-      const channel = supabase
-        .channel(`public:messages:${user.id}:${receiverId}`)
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'messages' },
-          (payload) => {
-            const newMsg = payload.new;
-            // Check if message is between these two users
-            if (
-              (newMsg.sender_id === user.id && newMsg.receiver_id === receiverId) ||
-              (newMsg.sender_id === receiverId && newMsg.receiver_id === user.id)
-            ) {
-              setMessages((prev) => {
-                // Avoid duplicates
-                if (prev.some((m) => m.id === newMsg.id)) return prev;
-                return [...prev, newMsg];
-              });
-              setIsChatEmpty(false);
+    // Poll for new messages every 3 seconds
+    const interval = setInterval(() => {
+      fetchMessages();
+    }, 3000);
 
-              // If we received a message from the active chat, mark it as read immediately
-              if (newMsg.sender_id === receiverId) {
-                supabase
-                  .from('messages')
-                  .update({ is_read: true })
-                  .eq('id', newMsg.id)
-                  .then();
-              }
-            }
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    } else {
-      const handleStorageChange = () => {
-        fetchMessages();
-      };
-      window.addEventListener('storage', handleStorageChange);
-      return () => {
-        window.removeEventListener('storage', handleStorageChange);
-      };
-    }
+    return () => clearInterval(interval);
   }, [user?.id, receiverId]);
 
   // Scroll to bottom when messages update
@@ -177,43 +102,36 @@ function Chat() {
 
   const handleSendMessage = async () => {
     if (newMessage.trim() === '' || !user || !user.id || !receiverId) return;
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
 
     const messageContent = newMessage;
     setNewMessage(''); // optimistic UI: clear immediately
 
-    if (authMode === 'supabase') {
-      const { error } = await supabase
-        .from('messages')
-        .insert([
-          {
-            sender_id: user.id,
-            receiver_id: receiverId,
-            content: messageContent,
-            is_read: false,
-          },
-        ]);
+    try {
+      const response = await fetch(`${API_URL}/api/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          receiverId,
+          content: messageContent
+        })
+      });
 
-      if (error) {
-        console.error('Error sending message:', error);
-        // Revert if error
+      if (response.ok) {
+        const sentMsg = await response.json();
+        setMessages((prev) => [...prev, sentMsg]);
+        setIsChatEmpty(false);
+      } else {
+        // Revert message back to input if sending failed
         setNewMessage(messageContent);
-        return;
       }
-    } else {
-      const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
-      const newMsg = {
-        id: crypto.randomUUID(),
-        sender_id: user.id,
-        receiver_id: receiverId,
-        content: messageContent,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      };
-      allLocalMessages.push(newMsg);
-      localStorage.setItem('alumni-connect-messages', JSON.stringify(allLocalMessages));
-      setMessages((prev) => [...prev, newMsg]);
-      setIsChatEmpty(false);
-      window.dispatchEvent(new Event('storage'));
+    } catch (err) {
+      console.error('Error sending message:', err);
+      setNewMessage(messageContent);
     }
   };
 

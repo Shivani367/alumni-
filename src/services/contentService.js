@@ -1,60 +1,83 @@
-import supabase from '../supabaseClient';
-import { authMode } from './authService';
+// src/services/contentService.js
 
-const keyFor = (table) => `alumni-connect-${table}`;
-const readLocal = (table) => {
-  try {
-    return JSON.parse(localStorage.getItem(keyFor(table))) || [];
-  } catch {
-    return [];
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const TOKEN_KEY = 'alumni-connect-token';
+
+const getHeaders = () => {
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
+  return headers;
 };
-const writeLocal = (table, items) => localStorage.setItem(keyFor(table), JSON.stringify(items));
 
 export const listContent = async (table, email) => {
-  if (authMode === 'supabase') {
-    let query = supabase.from(table).select('*');
-    if (email) query = query.eq('email_id', email);
-    const { data, error } = await query;
-    if (error) throw error;
-    return data || [];
+  let url = `${API_URL}/api/content/${table}`;
+  if (email) {
+    url += `?email_id=${encodeURIComponent(email)}`;
   }
-  const items = readLocal(table);
-  return email ? items.filter((item) => item.email_id === email) : items;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: getHeaders()
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || `Failed to fetch ${table}`);
+  }
+
+  return response.json();
 };
 
 export const getContent = async (table, id) => {
-  if (authMode === 'supabase') {
-    const { data, error } = await supabase.from(table).select('*').eq('id', id).single();
-    if (error) throw error;
-    return data;
+  const response = await fetch(`${API_URL}/api/content/${table}/${id}`, {
+    method: 'GET',
+    headers: getHeaders()
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || `Failed to fetch item from ${table}`);
   }
-  return readLocal(table).find((item) => String(item.id) === String(id)) || null;
+
+  return response.json();
 };
 
 export const saveContent = async (table, values, id) => {
-  if (authMode === 'supabase') {
-    const query = id
-      ? supabase.from(table).update(values).eq('id', id)
-      : supabase.from(table).insert([values]);
-    const { error } = await query;
-    if (error) throw error;
-    return;
+  const url = id 
+    ? `${API_URL}/api/content/${table}/${id}`
+    : `${API_URL}/api/content/${table}`;
+
+  const method = id ? 'PUT' : 'POST';
+
+  const response = await fetch(url, {
+    method: method,
+    headers: getHeaders(),
+    body: JSON.stringify(values)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || `Failed to save item in ${table}`);
   }
 
-  const items = readLocal(table);
-  if (id) {
-    writeLocal(table, items.map((item) => String(item.id) === String(id) ? { ...item, ...values } : item));
-  } else {
-    writeLocal(table, [{ id: crypto.randomUUID(), created_at: new Date().toISOString(), ...values }, ...items]);
-  }
+  return response.json();
 };
 
 export const deleteContent = async (table, id) => {
-  if (authMode === 'supabase') {
-    const { error } = await supabase.from(table).delete().eq('id', id);
-    if (error) throw error;
-    return;
+  const response = await fetch(`${API_URL}/api/content/${table}/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders()
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || `Failed to delete item from ${table}`);
   }
-  writeLocal(table, readLocal(table).filter((item) => String(item.id) !== String(id)));
+
+  return response.json();
 };
