@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import supabase from '../../supabaseClient';
+import { getSession } from '../../services/authService';
+import { listContent, saveContent, deleteContent } from '../../services/contentService';
 
 const Blogs = () => {
   const [blogs, setBlogs] = useState([]); // Store all blogs for the current user
@@ -15,67 +16,58 @@ const Blogs = () => {
   }, [userEmail]);
 
   const fetchUserEmail = async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
-
-    if (error) {
+    try {
+      const session = await getSession();
+      if (session?.user) {
+        setUserEmail(session.user.email);
+      }
+    } catch (error) {
       console.error('Error fetching user session:', error);
-    } else if (session?.user) {
-      setUserEmail(session.user.email); // Set user email from session
     }
   };
 
   const fetchBlogs = async () => {
     if (!userEmail) return;
-    const { data, error } = await supabase
-      .from('blogs')
-      .select('*')
-      .eq('email_id', userEmail)
-      .order('created_at', { ascending: false });
-
-    if (error) console.error('Error fetching blogs:', error);
-    else setBlogs(data);
+    try {
+      const data = await listContent('blogs', userEmail);
+      setBlogs(data);
+    } catch (error) {
+      console.error('Error fetching blogs:', error);
+    }
   };
 
   const handleCreateBlog = async () => {
-    const { error } = await supabase
-      .from('blogs')
-      .insert([{ title, excerpt, content, email_id: userEmail }]);
-
-    if (error) console.error('Error creating blog:', error);
-    else {
+    try {
+      await saveContent('blogs', { title, excerpt, content, email_id: userEmail });
       setTitle('');
       setExcerpt('');
       setContent('');
       fetchBlogs();
+    } catch (error) {
+      console.error('Error creating blog:', error);
     }
   };
 
   const handleEditBlog = async () => {
-    const { error } = await supabase
-      .from('blogs')
-      .update({ title, excerpt, content })
-      .eq('id', editBlogId)
-      .eq('email_id', userEmail);
-
-    if (error) console.error('Error updating blog:', error);
-    else {
+    try {
+      await saveContent('blogs', { title, excerpt, content, email_id: userEmail }, editBlogId);
       setTitle('');
       setExcerpt('');
       setContent('');
       setEditBlogId(null);
       fetchBlogs();
+    } catch (error) {
+      console.error('Error updating blog:', error);
     }
   };
 
   const handleDeleteBlog = async (id) => {
-    const { error } = await supabase
-      .from('blogs')
-      .delete()
-      .eq('id', id)
-      .eq('email_id', userEmail);
-
-    if (error) console.error('Error deleting blog:', error);
-    else fetchBlogs();
+    try {
+      await deleteContent('blogs', id);
+      fetchBlogs();
+    } catch (error) {
+      console.error('Error deleting blog:', error);
+    }
   };
 
   const handleLoadBlog = (blog) => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import supabase from '../supabaseClient';
+import { getSession, signOut, authMode } from '../services/authService';
 import { useNavigate } from 'react-router-dom';
 import Blogs from '../components/dashboard/blog';
 import Events from '../components/dashboard/events';
@@ -15,16 +16,15 @@ const Dashboard = () => {
 
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
-
-      if (error) {
+      try {
+        const session = await getSession();
+        if (session?.user) {
+          setUser(session.user);
+        } else {
+          navigate('/');
+        }
+      } catch (error) {
         console.error('Error fetching session:', error);
-        return;
-      }
-
-      if (session?.user) {
-        setUser(session.user);
-      } else {
         navigate('/');
       }
     };
@@ -35,15 +35,20 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchTables = async () => {
       if (user) {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id);
+        if (authMode === 'supabase') {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id);
 
-        if (error) {
-          console.error('Error fetching data:', error);
+          if (error) {
+            console.error('Error fetching data:', error);
+          } else {
+            setTables(data);
+          }
         } else {
-          setTables(data);
+          // Local fallback
+          setTables([{ id: user.id, name: user.user_metadata?.name || 'Local User', status: user.user_metadata?.status || 'Member' }]);
         }
       }
     };
@@ -52,11 +57,11 @@ const Dashboard = () => {
   }, [user]);
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error('Error logging out:', error);
-    } else {
+    try {
+      await signOut();
       navigate('/');
+    } catch (error) {
+      console.error('Error logging out:', error);
     }
   };
 

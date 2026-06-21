@@ -1,40 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import supabase from '../../supabaseClient';
+import { authMode } from '../../services/authService';
+import { listContent } from '../../services/contentService';
 
 const Notifications = () => {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     const fetchNotifications = async () => {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
+      try {
+        const data = await listContent('notifications');
+        setNotifications(data);
+      } catch (error) {
         console.error('Error fetching notifications:', error);
-      } else {
-        setNotifications(data); // Set initial notifications
       }
     };
 
     fetchNotifications();
 
-    // Set up a real-time subscription in Supabase v2.x
-    const channel = supabase
-      .channel('public:notifications')  // Create a real-time channel
-      .on(
-        'postgres_changes',  // Listening for PostgreSQL changes
-        { event: 'INSERT', schema: 'public', table: 'notifications' },
-        (payload) => {
-          setNotifications((prevNotifications) => [payload.new, ...prevNotifications]);
-        }
-      )
-      .subscribe();
+    let channel;
+    if (authMode === 'supabase') {
+      // Set up a real-time subscription in Supabase v2.x
+      channel = supabase
+        .channel('public:notifications')  // Create a real-time channel
+        .on(
+          'postgres_changes',  // Listening for PostgreSQL changes
+          { event: 'INSERT', schema: 'public', table: 'notifications' },
+          (payload) => {
+            setNotifications((prevNotifications) => [payload.new, ...prevNotifications]);
+          }
+        )
+        .subscribe();
+    }
 
     // Cleanup the subscription when the component unmounts
     return () => {
-      supabase.removeChannel(channel);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, []);
 

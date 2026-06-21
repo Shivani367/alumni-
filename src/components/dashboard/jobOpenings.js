@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import supabase from '../../supabaseClient';
+import { getSession } from '../../services/authService';
+import { listContent, saveContent, deleteContent } from '../../services/contentService';
 
 const JobOpenings = () => {
   const [jobs, setJobs] = useState([]); // Store all job openings for the current user
@@ -17,73 +18,64 @@ const JobOpenings = () => {
 
   // Fetch the logged-in user's email
   const fetchUserEmail = async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
-
-    if (error) {
+    try {
+      const session = await getSession();
+      if (session?.user) {
+        setUserEmail(session.user.email);
+      }
+    } catch (error) {
       console.error('Error fetching user session:', error);
-    } else if (session?.user) {
-      setUserEmail(session.user.email); // Set user email from session
     }
   };
 
   // Fetch all job openings for the current user
   const fetchJobs = async () => {
-    if (!userEmail) return; // Don't fetch until userEmail is available
-    const { data, error } = await supabase
-      .from('job_openings')
-      .select('*')
-      .eq('email_id', userEmail) // Query only job openings related to the logged-in user's email
-      .order('postedDate', { ascending: false });
-
-    if (error) console.error('Error fetching job openings:', error);
-    else setJobs(data);
+    if (!userEmail) return;
+    try {
+      const data = await listContent('job_openings', userEmail);
+      setJobs(data);
+    } catch (error) {
+      console.error('Error fetching job openings:', error);
+    }
   };
 
   // Create a new job opening with the user's email_id
   const handleCreateJob = async () => {
-    const { error } = await supabase
-      .from('job_openings')
-      .insert([{ title, postedDate, location, description, email_id: userEmail }]); // Insert job with email_id
-
-    if (error) console.error('Error creating job opening:', error);
-    else {
+    try {
+      await saveContent('job_openings', { title, postedDate, location, description, email_id: userEmail });
       setTitle('');
       setPostedDate('');
       setLocation('');
       setDescription('');
-      fetchJobs(); // Refresh job list
+      fetchJobs();
+    } catch (error) {
+      console.error('Error creating job opening:', error);
     }
   };
 
   // Edit an existing job opening
   const handleEditJob = async () => {
-    const { error } = await supabase
-      .from('job_openings')
-      .update({ title, postedDate, location, description })
-      .eq('id', editJobId)
-      .eq('email_id', userEmail); // Ensure that the logged-in user can only edit their own job opening
-
-    if (error) console.error('Error updating job opening:', error);
-    else {
+    try {
+      await saveContent('job_openings', { title, postedDate, location, description, email_id: userEmail }, editJobId);
       setTitle('');
       setPostedDate('');
       setLocation('');
       setDescription('');
       setEditJobId(null);
-      fetchJobs(); // Refresh job list
+      fetchJobs();
+    } catch (error) {
+      console.error('Error updating job opening:', error);
     }
   };
 
   // Delete a job opening
   const handleDeleteJob = async (id) => {
-    const { error } = await supabase
-      .from('job_openings')
-      .delete()
-      .eq('id', id)
-      .eq('email_id', userEmail); // Ensure that the logged-in user can only delete their own job opening
-
-    if (error) console.error('Error deleting job opening:', error);
-    else fetchJobs(); // Refresh job list
+    try {
+      await deleteContent('job_openings', id);
+      fetchJobs();
+    } catch (error) {
+      console.error('Error deleting job opening:', error);
+    }
   };
 
   // Load job for editing

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import supabase from '../../supabaseClient';
+import { getSession } from '../../services/authService';
+import { listContent, saveContent, deleteContent } from '../../services/contentService';
 
 const Events = () => {
   const [events, setEvents] = useState([]); // Store all events for the current user
@@ -17,73 +18,64 @@ const Events = () => {
 
   // Fetch the logged-in user's email
   const fetchUserEmail = async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
-
-    if (error) {
+    try {
+      const session = await getSession();
+      if (session?.user) {
+        setUserEmail(session.user.email);
+      }
+    } catch (error) {
       console.error('Error fetching user session:', error);
-    } else if (session?.user) {
-      setUserEmail(session.user.email); // Set user email from session
     }
   };
 
   // Fetch all events for the current user
   const fetchEvents = async () => {
-    if (!userEmail) return; // Don't fetch until userEmail is available
-    const { data, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('email_id', userEmail) // Query only events related to the logged-in user's email
-      .order('date', { ascending: false });
-
-    if (error) console.error('Error fetching events:', error);
-    else setEvents(data);
+    if (!userEmail) return;
+    try {
+      const data = await listContent('events', userEmail);
+      setEvents(data);
+    } catch (error) {
+      console.error('Error fetching events:', error);
+    }
   };
 
   // Create a new event with the user's email_id
   const handleCreateEvent = async () => {
-    const { error } = await supabase
-      .from('events')
-      .insert([{ title, date, location, description, email_id: userEmail }]); // Insert event with email_id
-
-    if (error) console.error('Error creating event:', error);
-    else {
+    try {
+      await saveContent('events', { title, date, location, description, email_id: userEmail });
       setTitle('');
       setDate('');
       setLocation('');
       setDescription('');
-      fetchEvents(); // Refresh events list
+      fetchEvents();
+    } catch (error) {
+      console.error('Error creating event:', error);
     }
   };
 
   // Edit an existing event
   const handleEditEvent = async () => {
-    const { error } = await supabase
-      .from('events')
-      .update({ title, date, location, description })
-      .eq('id', editEventId)
-      .eq('email_id', userEmail); // Ensure that the logged-in user can only edit their own event
-
-    if (error) console.error('Error updating event:', error);
-    else {
+    try {
+      await saveContent('events', { title, date, location, description, email_id: userEmail }, editEventId);
       setTitle('');
       setDate('');
       setLocation('');
       setDescription('');
       setEditEventId(null);
-      fetchEvents(); // Refresh events list
+      fetchEvents();
+    } catch (error) {
+      console.error('Error updating event:', error);
     }
   };
 
   // Delete an event
   const handleDeleteEvent = async (id) => {
-    const { error } = await supabase
-      .from('events')
-      .delete()
-      .eq('id', id)
-      .eq('email_id', userEmail); // Ensure that the logged-in user can only delete their own event
-
-    if (error) console.error('Error deleting event:', error);
-    else fetchEvents(); // Refresh events list
+    try {
+      await deleteContent('events', id);
+      fetchEvents();
+    } catch (error) {
+      console.error('Error deleting event:', error);
+    }
   };
 
   // Load event for editing

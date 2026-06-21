@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import supabase from '../../supabaseClient';
+import { getSession, authMode } from '../../services/authService';
 import UserList from './UserList';
 
 function Chat() {
@@ -13,10 +14,12 @@ function Chat() {
 
   useEffect(() => {
     const fetchUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setUser(user);
+      try {
+        const session = await getSession();
+        setUser(session?.user ?? null);
+      } catch (err) {
+        console.error('Error fetching user:', err);
+      }
     };
 
     fetchUser();
@@ -26,14 +29,22 @@ function Chat() {
   useEffect(() => {
     const fetchReceiverProfile = async () => {
       if (!receiverId) return;
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', receiverId)
-        .single();
-      
-      if (!error) {
-        setReceiverProfile(data);
+      if (authMode === 'supabase') {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', receiverId)
+          .single();
+        
+        if (!error) {
+          setReceiverProfile(data);
+        }
+      } else {
+        const accounts = JSON.parse(localStorage.getItem('alumni-connect-accounts') || '[]');
+        const acc = accounts.find((a) => a.id === receiverId);
+        if (acc) {
+          setReceiverProfile({ id: acc.id, name: acc.profile?.name, status: acc.profile?.status });
+        }
       }
     };
     fetchReceiverProfile();
@@ -42,41 +53,67 @@ function Chat() {
   const fetchMessages = async () => {
     if (!user?.id || !receiverId) return;
 
-    try {
-      const { data: sentMessages, error: sentError } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('sender_id', user.id)
-        .eq('receiver_id', receiverId)
-        .order('created_at', { ascending: true });
+    if (authMode === 'supabase') {
+      try {
+        const { data: sentMessages, error: sentError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('sender_id', user.id)
+          .eq('receiver_id', receiverId)
+          .order('created_at', { ascending: true });
 
-      if (sentError) throw sentError;
+        if (sentError) throw sentError;
 
-      const { data: receivedMessages, error: receivedError } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('sender_id', receiverId)
-        .eq('receiver_id', user.id)
-        .order('created_at', { ascending: true });
+        const { data: receivedMessages, error: receivedError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('sender_id', receiverId)
+          .eq('receiver_id', user.id)
+          .order('created_at', { ascending: true });
 
-      if (receivedError) throw receivedError;
+        if (receivedError) throw receivedError;
 
-      const allMessages = [...sentMessages, ...receivedMessages].sort(
-        (a, b) => new Date(a.created_at) - new Date(b.created_at)
+        const allMessages = [...sentMessages, ...receivedMessages].sort(
+          (a, b) => new Date(a.created_at) - new Date(b.created_at)
+        );
+
+        setMessages(allMessages);
+        setIsChatEmpty(allMessages.length === 0);
+
+        // Mark received messages as read
+        await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('sender_id', receiverId)
+          .eq('receiver_id', user.id)
+          .eq('is_read', false);
+      } catch (err) {
+        console.error('Error fetching messages:', err);
+      }
+    } else {
+      const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
+      const filtered = allLocalMessages.filter(
+        (m) =>
+          (m.sender_id === user.id && m.receiver_id === receiverId) ||
+          (m.sender_id === receiverId && m.receiver_id === user.id)
       );
 
-      setMessages(allMessages);
-      setIsChatEmpty(allMessages.length === 0);
+      setMessages(filtered);
+      setIsChatEmpty(filtered.length === 0);
 
-      // Mark received messages as read
-      await supabase
-        .from('messages')
-        .update({ is_read: true })
-        .eq('sender_id', receiverId)
-        .eq('receiver_id', user.id)
-        .eq('is_read', false);
-    } catch (err) {
-      console.error('Error fetching messages:', err);
+      // Local mark as read
+      let updated = false;
+      const updatedMessages = allLocalMessages.map((m) => {
+        if (m.sender_id === receiverId && m.receiver_id === user.id && !m.is_read) {
+          updated = true;
+          return { ...m, is_read: true };
+        }
+        return m;
+      });
+      if (updated) {
+        localStorage.setItem('alumni-connect-messages', JSON.stringify(updatedMessages));
+        window.dispatchEvent(new Event('storage'));
+      }
     }
   };
 
@@ -85,42 +122,52 @@ function Chat() {
 
     if (!user?.id || !receiverId) return;
 
-    // Real-time subscription to the messages table
-    const channel = supabase
-      .channel(`public:messages:${user.id}:${receiverId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          const newMsg = payload.new;
-          // Check if message is between these two users
-          if (
-            (newMsg.sender_id === user.id && newMsg.receiver_id === receiverId) ||
-            (newMsg.sender_id === receiverId && newMsg.receiver_id === user.id)
-          ) {
-            setMessages((prev) => {
-              // Avoid duplicates
-              if (prev.some((m) => m.id === newMsg.id)) return prev;
-              return [...prev, newMsg];
-            });
-            setIsChatEmpty(false);
+    if (authMode === 'supabase') {
+      // Real-time subscription to the messages table
+      const channel = supabase
+        .channel(`public:messages:${user.id}:${receiverId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'messages' },
+          (payload) => {
+            const newMsg = payload.new;
+            // Check if message is between these two users
+            if (
+              (newMsg.sender_id === user.id && newMsg.receiver_id === receiverId) ||
+              (newMsg.sender_id === receiverId && newMsg.receiver_id === user.id)
+            ) {
+              setMessages((prev) => {
+                // Avoid duplicates
+                if (prev.some((m) => m.id === newMsg.id)) return prev;
+                return [...prev, newMsg];
+              });
+              setIsChatEmpty(false);
 
-            // If we received a message from the active chat, mark it as read immediately
-            if (newMsg.sender_id === receiverId) {
-              supabase
-                .from('messages')
-                .update({ is_read: true })
-                .eq('id', newMsg.id)
-                .then();
+              // If we received a message from the active chat, mark it as read immediately
+              if (newMsg.sender_id === receiverId) {
+                supabase
+                  .from('messages')
+                  .update({ is_read: true })
+                  .eq('id', newMsg.id)
+                  .then();
+              }
             }
           }
-        }
-      )
-      .subscribe();
+        )
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      const handleStorageChange = () => {
+        fetchMessages();
+      };
+      window.addEventListener('storage', handleStorageChange);
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+      };
+    }
   }, [user?.id, receiverId]);
 
   // Scroll to bottom when messages update
@@ -134,22 +181,39 @@ function Chat() {
     const messageContent = newMessage;
     setNewMessage(''); // optimistic UI: clear immediately
 
-    const { error } = await supabase
-      .from('messages')
-      .insert([
-        {
-          sender_id: user.id,
-          receiver_id: receiverId,
-          content: messageContent,
-          is_read: false,
-        },
-      ]);
+    if (authMode === 'supabase') {
+      const { error } = await supabase
+        .from('messages')
+        .insert([
+          {
+            sender_id: user.id,
+            receiver_id: receiverId,
+            content: messageContent,
+            is_read: false,
+          },
+        ]);
 
-    if (error) {
-      console.error('Error sending message:', error);
-      // Revert if error
-      setNewMessage(messageContent);
-      return;
+      if (error) {
+        console.error('Error sending message:', error);
+        // Revert if error
+        setNewMessage(messageContent);
+        return;
+      }
+    } else {
+      const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
+      const newMsg = {
+        id: crypto.randomUUID(),
+        sender_id: user.id,
+        receiver_id: receiverId,
+        content: messageContent,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      };
+      allLocalMessages.push(newMsg);
+      localStorage.setItem('alumni-connect-messages', JSON.stringify(allLocalMessages));
+      setMessages((prev) => [...prev, newMsg]);
+      setIsChatEmpty(false);
+      window.dispatchEvent(new Event('storage'));
     }
   };
 

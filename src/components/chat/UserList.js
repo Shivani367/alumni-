@@ -1,17 +1,30 @@
 import React, { useEffect, useState } from 'react';
 import supabase from '../../supabaseClient';
+import { authMode } from '../../services/authService';
 
 function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
   const [users, setUsers] = useState([]);
 
   const fetchUsersWithUnreadCount = async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, email, name, status');
+    let data;
+    if (authMode === 'supabase') {
+      const { data: profiles, error } = await supabase
+        .from('profiles')
+        .select('id, email, name, status');
 
-    if (error) {
-      console.error('Error fetching users:', error);
-      return;
+      if (error) {
+        console.error('Error fetching users:', error);
+        return;
+      }
+      data = profiles;
+    } else {
+      const accounts = JSON.parse(localStorage.getItem('alumni-connect-accounts') || '[]');
+      data = accounts.map((acc) => ({
+        id: acc.id,
+        email: acc.email,
+        name: acc.profile?.name,
+        status: acc.profile?.status,
+      }));
     }
 
     // Filter out the current user
@@ -20,20 +33,29 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
     // Fetch unread message count for each user
     const usersWithUnreadCount = await Promise.all(
       filteredUsers.map(async (user) => {
-        const { count, error: unreadError } = await supabase
-          .from('messages')
-          .select('id', { count: 'exact' })
-          .eq('sender_id', user.id)
-          .eq('receiver_id', currentUser.id)
-          .eq('is_read', false);
+        let count = 0;
+        if (authMode === 'supabase') {
+          const { count: unreadCount, error: unreadError } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact' })
+            .eq('sender_id', user.id)
+            .eq('receiver_id', currentUser.id)
+            .eq('is_read', false);
 
-        if (unreadError) {
-          console.error(`Error fetching unread count for user ${user.id}:`, unreadError);
+          if (unreadError) {
+            console.error(`Error fetching unread count for user ${user.id}:`, unreadError);
+          }
+          count = unreadCount || 0;
+        } else {
+          const allLocalMessages = JSON.parse(localStorage.getItem('alumni-connect-messages') || '[]');
+          count = allLocalMessages.filter(
+            (m) => m.sender_id === user.id && m.receiver_id === currentUser.id && !m.is_read
+          ).length;
         }
 
         return {
           ...user,
-          unread_count: count || 0,
+          unread_count: count,
         };
       })
     );
@@ -46,22 +68,31 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
 
     if (!currentUser?.id) return;
 
-    // Real-time channel to listen to any insert or update on the messages table to update unread counts
-    const channel = supabase
-      .channel('public:messages_unread_list')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'messages' },
-        (payload) => {
-          // If a new message is inserted or a message is updated, fetch unread counts again
-          fetchUsersWithUnreadCount();
-        }
-      )
-      .subscribe();
+    if (authMode === 'supabase') {
+      // Real-time channel to listen to any insert or update on the messages table to update unread counts
+      const channel = supabase
+        .channel('public:messages_unread_list')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'messages' },
+          (payload) => {
+            fetchUsersWithUnreadCount();
+          }
+        )
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      const handleStorageChange = () => {
+        fetchUsersWithUnreadCount();
+      };
+      window.addEventListener('storage', handleStorageChange);
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+      };
+    }
   }, [currentUser]);
 
   const getAvatarColor = (name) => {
