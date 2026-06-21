@@ -4,8 +4,8 @@ import React from 'react';
 const Gallery = () => {
   const images = [
     {
-      url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?q=80&w=600&auto=format&fit=crop',
-      title: 'Graduation Day Ceremonies'
+      url: 'https://www.instagram.com/p/DBQB0XfhLZ4/media/?size=l',
+      title: 'Alumni Networking Event'
     },
     {
       url: 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?q=80&w=600&auto=format&fit=crop',
