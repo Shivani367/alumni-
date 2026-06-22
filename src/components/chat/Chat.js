@@ -3,7 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getSession } from '../../services/authService';
 import UserList from './UserList';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_URL = process.env.REACT_APP_API_URL || (window.location.port === '3000' ? 'http://localhost:5000' : '');
 const TOKEN_KEY = 'alumni-connect-token';
 
 function Chat() {

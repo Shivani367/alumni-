@@ -1,6 +1,6 @@
 // src/services/authService.js
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_URL = process.env.REACT_APP_API_URL || (window.location.port === '3000' ? 'http://localhost:5000' : '');
 const TOKEN_KEY = 'alumni-connect-token';
 const AUTH_EVENT = 'alumni-auth-change';
 

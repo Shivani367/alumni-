@@ -421,6 +421,19 @@ app.get('/api/users', authenticateToken, (req, res) => {
   res.json(usersWithCounts);
 });
 
+// Serve React static frontend in production
+const buildPath = path.join(__dirname, '..', 'build');
+if (fs.existsSync(buildPath)) {
+  app.use(express.static(buildPath));
+  
+  // All non-API routes serve React index.html
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api/')) {
+      res.sendFile(path.join(buildPath, 'index.html'));
+    }
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`Express API Server listening on port ${PORT}`);
 });

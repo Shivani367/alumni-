@@ -1,7 +1,7 @@
 // src/components/chat/UserList.js
 import React, { useEffect, useState } from 'react';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_URL = process.env.REACT_APP_API_URL || (window.location.port === '3000' ? 'http://localhost:5000' : '');
 const TOKEN_KEY = 'alumni-connect-token';
 
 function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
