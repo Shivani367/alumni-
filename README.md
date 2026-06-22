@@ -1,8 +1,8 @@
 ---
 title: Alumni Connect
 emoji: 🎓
-colorFrom: teal
-colorTo: slate
+colorFrom: blue
+colorTo: green
 sdk: docker
 pinned: false
 ---
