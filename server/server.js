@@ -434,6 +434,6 @@ if (fs.existsSync(buildPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Express API Server listening on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Express API Server listening on port ${PORT} on host 0.0.0.0`);
 });
