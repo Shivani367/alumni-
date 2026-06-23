@@ -35,12 +35,22 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
   useEffect(() => {
     fetchUsersWithUnreadCount();
 
-    // Poll for updates (e.g. unread counts, new users) every 3 seconds
+    // Instant update when unread notifications are pushed via WebSockets
+    const handleUnreadEvent = (event) => {
+      fetchUsersWithUnreadCount();
+    };
+
+    window.addEventListener('alumni-chat-unread', handleUnreadEvent);
+
+    // Relaxed background polling interval for user lists (15s instead of 3s)
     const interval = setInterval(() => {
       fetchUsersWithUnreadCount();
-    }, 3000);
+    }, 15000);
 
-    return () => clearInterval(interval);
+    return () => {
+      window.removeEventListener('alumni-chat-unread', handleUnreadEvent);
+      clearInterval(interval);
+    };
   }, [currentUser]);
 
   const getAvatarColor = (name) => {
@@ -81,7 +91,7 @@ function UserList({ setReceiverId, currentUser, selectedReceiverId }) {
                 onClick={() => setReceiverId(user.id)}
                 className={`w-full text-left p-3 rounded-xl flex items-center transition-all duration-150 border ${
                   isSelected
-                    ? 'bg-teal-50 text-teal-900 border-teal-150 shadow-sm'
+                    ? 'bg-teal-55 text-teal-900 border-teal-150 shadow-sm'
                     : 'bg-transparent text-slate-700 border-transparent hover:bg-slate-200/50 hover:text-slate-900'
                 }`}
               >

@@ -5,10 +5,17 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const WebSocket = require('ws');
+const { createClient } = require('@supabase/supabase-js');
+
+// Load environment variables from root or server directory
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = 'eec-alumni-portal-super-secret-key-12345';
+const JWT_SECRET = process.env.JWT_SECRET || 'eec-alumni-portal-super-secret-key-12345';
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -98,7 +105,7 @@ const defaultData = {
   messages: []
 };
 
-// Database helper functions
+// Database helper functions (local fallback)
 const readDb = () => {
   try {
     if (!fs.existsSync(DB_PATH)) {
@@ -158,8 +165,20 @@ const seedUsers = () => {
   }
 };
 
-// Initial Seed
-seedUsers();
+// --- DUAL DATABASE SYSTEM SETUP ---
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://poaxhsurnoaohtmzdwon.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvYXhoc3Vybm9hb2h0bXpkd29uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjk0Mzc5MTcsImV4cCI6MjA0NTAxMzkxN30.dLxi8cD1DL-_WudCw4K-D4bvgaOiFLs19I8X82A70d4';
+
+let supabase = null;
+let dbMode = 'local';
+
+if (SUPABASE_URL && SUPABASE_KEY) {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+  } catch (err) {
+    console.error('Error creating Supabase client:', err.message);
+  }
+}
 
 // Middleware to authenticate JWT tokens
 const authenticateToken = (req, res, next) => {
@@ -176,128 +195,260 @@ const authenticateToken = (req, res, next) => {
 };
 
 // API: Auth Routes
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { email, password, profile } = req.body;
   if (!email || !password || !profile || !profile.name) {
     return res.status(400).json({ error: 'Missing required parameters' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const db = readDb();
 
-  if (db.users.find(u => u.email === normalizedEmail)) {
-    return res.status(400).json({ error: 'An account with this email already exists.' });
-  }
+  if (dbMode === 'supabase') {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+        options: { data: profile }
+      });
+      if (error) throw error;
 
-  const salt = bcrypt.genSaltSync(10);
-  const passwordHash = bcrypt.hashSync(password, salt);
+      // Upsert profile in Supabase profiles table
+      const { error: profileError } = await supabase.from('profiles').upsert({
+        id: data.user.id,
+        email: normalizedEmail,
+        name: profile.name,
+        phone_number: profile.phone_number,
+        status: profile.status,
+        country: profile.country
+      });
+      if (profileError) throw profileError;
 
-  const newUser = {
-    id: 'usr-' + Math.random().toString(36).substr(2, 9),
-    email: normalizedEmail,
-    passwordHash,
-    profile
-  };
-
-  db.users.push(newUser);
-  writeDb(db);
-
-  const token = jwt.sign({ id: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({
-    session: {
-      access_token: token,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        user_metadata: newUser.profile
-      }
+      const token = jwt.sign({ id: data.user.id, email: normalizedEmail }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({
+        session: {
+          access_token: token,
+          user: {
+            id: data.user.id,
+            email: normalizedEmail,
+            user_metadata: profile
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Supabase Sign-Up Error:', err.message);
+      return res.status(400).json({ error: err.message || 'Registration failed' });
     }
-  });
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (db.users.find(u => u.email === normalizedEmail)) {
+      return res.status(400).json({ error: 'An account with this email already exists.' });
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    const passwordHash = bcrypt.hashSync(password, salt);
+
+    const newUser = {
+      id: 'usr-' + Math.random().toString(36).substr(2, 9),
+      email: normalizedEmail,
+      passwordHash,
+      profile
+    };
+
+    db.users.push(newUser);
+    writeDb(db);
+
+    const token = jwt.sign({ id: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({
+      session: {
+        access_token: token,
+        user: {
+          id: newUser.id,
+          email: newUser.email,
+          user_metadata: newUser.profile
+        }
+      }
+    });
+  }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const db = readDb();
-  const user = db.users.find(u => u.email === normalizedEmail);
 
-  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
-    return res.status(400).json({ error: 'Invalid email or password.' });
+  if (dbMode === 'supabase') {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password
+      });
+      if (error) throw error;
+
+      // Query profiles table
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      const profile = profileData || {
+        name: data.user.user_metadata?.name || 'User',
+        status: data.user.user_metadata?.status || 'Alumni',
+        phone_number: data.user.user_metadata?.phone_number || '',
+        country: data.user.user_metadata?.country || ''
+      };
+
+      const token = jwt.sign({ id: data.user.id, email: data.user.email }, JWT_SECRET, { expiresIn: '7d' });
+      return res.json({
+        session: {
+          access_token: token,
+          user: {
+            id: data.user.id,
+            email: data.user.email,
+            user_metadata: profile
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Supabase Login Error:', err.message);
+      return res.status(400).json({ error: err.message || 'Login failed' });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    const user = db.users.find(u => u.email === normalizedEmail);
+
+    if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
+      return res.status(400).json({ error: 'Invalid email or password.' });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({
+      session: {
+        access_token: token,
+        user: {
+          id: user.id,
+          email: user.email,
+          user_metadata: user.profile
+        }
+      }
+    });
   }
+});
 
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({
-    session: {
-      access_token: token,
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  if (dbMode === 'supabase') {
+    try {
+      const { data: profileData, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', req.user.id)
+        .single();
+
+      if (error || !profileData) {
+        return res.json({ user: { id: req.user.id, email: req.user.email, user_metadata: {} } });
+      }
+
+      res.json({
+        user: {
+          id: req.user.id,
+          email: req.user.email,
+          user_metadata: profileData
+        }
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to retrieve profile' });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    const user = db.users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    res.json({
       user: {
         id: user.id,
         email: user.email,
         user_metadata: user.profile
       }
-    }
-  });
-});
-
-app.get('/api/auth/me', authenticateToken, (req, res) => {
-  const db = readDb();
-  const user = db.users.find(u => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  res.json({
-    user: {
-      id: user.id,
-      email: user.email,
-      user_metadata: user.profile
-    }
-  });
+    });
+  }
 });
 
 // API: Content Management (Generic)
-app.get('/api/content/:table', (req, res) => {
+app.get('/api/content/:table', async (req, res) => {
   const { table } = req.params;
   const { email_id } = req.query;
-  const db = readDb();
 
-  if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
+  if (dbMode === 'supabase') {
+    try {
+      let query = supabase.from(table).select('*');
+      if (email_id) {
+        query = query.eq('email_id', email_id);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
 
-  let items = db[table];
-  if (email_id) {
-    items = items.filter(item => item.email_id === email_id);
+      data.sort((a, b) => {
+        const timeA = new Date(a.created_at || a.postedDate || a.date || 0).getTime();
+        const timeB = new Date(b.created_at || b.postedDate || b.date || 0).getTime();
+        return timeB - timeA;
+      });
+
+      res.json(data || []);
+    } catch (err) {
+      console.error(`Supabase Content List Error for ${table}:`, err.message);
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
+
+    let items = db[table];
+    if (email_id) {
+      items = items.filter(item => item.email_id === email_id);
+    }
+
+    items.sort((a, b) => {
+      const timeA = new Date(a.created_at || a.postedDate || a.date || 0).getTime();
+      const timeB = new Date(b.created_at || b.postedDate || b.date || 0).getTime();
+      return timeB - timeA;
+    });
+
+    res.json(items);
   }
-
-  // Sort by created_at or date descending if available
-  items.sort((a, b) => {
-    const timeA = new Date(a.created_at || a.postedDate || a.date || 0).getTime();
-    const timeB = new Date(b.created_at || b.postedDate || b.date || 0).getTime();
-    return timeB - timeA;
-  });
-
-  res.json(items);
 });
 
-app.get('/api/content/:table/:id', (req, res) => {
+app.get('/api/content/:table/:id', async (req, res) => {
   const { table, id } = req.params;
-  const db = readDb();
 
-  if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
+  if (dbMode === 'supabase') {
+    try {
+      const { data, error } = await supabase.from(table).select('*').eq('id', id).single();
+      if (error) throw error;
+      res.json(data);
+    } catch (err) {
+      res.status(404).json({ error: 'Item not found' });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
 
-  const item = db[table].find(i => String(i.id) === String(id));
-  if (!item) return res.status(404).json({ error: 'Item not found' });
+    const item = db[table].find(i => String(i.id) === String(id));
+    if (!item) return res.status(404).json({ error: 'Item not found' });
 
-  res.json(item);
+    res.json(item);
+  }
 });
 
-app.post('/api/content/:table', authenticateToken, (req, res) => {
+app.post('/api/content/:table', authenticateToken, async (req, res) => {
   const { table } = req.params;
-  const db = readDb();
-
-  if (!db[table]) {
-    db[table] = [];
-  }
 
   const newItem = {
     id: `${table.substr(0, 3)}-` + Math.random().toString(36).substr(2, 9),
@@ -305,83 +456,141 @@ app.post('/api/content/:table', authenticateToken, (req, res) => {
     ...req.body
   };
 
-  db[table].unshift(newItem);
-  writeDb(db);
+  if (dbMode === 'supabase') {
+    try {
+      const { error } = await supabase.from(table).insert([newItem]);
+      if (error) throw error;
+      res.json(newItem);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (!db[table]) {
+      db[table] = [];
+    }
 
-  res.json(newItem);
-});
-
-app.put('/api/content/:table/:id', authenticateToken, (req, res) => {
-  const { table, id } = req.params;
-  const db = readDb();
-
-  if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
-
-  const index = db[table].findIndex(i => String(i.id) === String(id));
-  if (index === -1) return res.status(404).json({ error: 'Item not found' });
-
-  db[table][index] = {
-    ...db[table][index],
-    ...req.body
-  };
-
-  writeDb(db);
-  res.json(db[table][index]);
-});
-
-app.delete('/api/content/:table/:id', authenticateToken, (req, res) => {
-  const { table, id } = req.params;
-  const db = readDb();
-
-  if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
-
-  const filtered = db[table].filter(i => String(i.id) !== String(id));
-  if (filtered.length === db[table].length) {
-    return res.status(404).json({ error: 'Item not found' });
+    db[table].unshift(newItem);
+    writeDb(db);
+    res.json(newItem);
   }
-
-  db[table] = filtered;
-  writeDb(db);
-
-  res.json({ success: true });
 });
 
-// API: Chat Messages
-app.get('/api/messages', authenticateToken, (req, res) => {
+app.put('/api/content/:table/:id', authenticateToken, async (req, res) => {
+  const { table, id } = req.params;
+
+  if (dbMode === 'supabase') {
+    try {
+      const { error } = await supabase.from(table).update(req.body).eq('id', id);
+      if (error) throw error;
+      res.json({ id, ...req.body });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
+
+    const index = db[table].findIndex(i => String(i.id) === String(id));
+    if (index === -1) return res.status(404).json({ error: 'Item not found' });
+
+    db[table][index] = {
+      ...db[table][index],
+      ...req.body
+    };
+
+    writeDb(db);
+    res.json(db[table][index]);
+  }
+});
+
+app.delete('/api/content/:table/:id', authenticateToken, async (req, res) => {
+  const { table, id } = req.params;
+
+  if (dbMode === 'supabase') {
+    try {
+      const { error } = await supabase.from(table).delete().eq('id', id);
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    if (!db[table]) return res.status(404).json({ error: `Table '${table}' not found` });
+
+    const filtered = db[table].filter(i => String(i.id) !== String(id));
+    if (filtered.length === db[table].length) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    db[table] = filtered;
+    writeDb(db);
+    res.json({ success: true });
+  }
+});
+
+// API: HTTP fallbacks for Chat Messages (used for initial listing and history load)
+app.get('/api/messages', authenticateToken, async (req, res) => {
   const { receiverId } = req.query;
   if (!receiverId) return res.status(400).json({ error: 'receiverId is required' });
 
-  const db = readDb();
   const userId = req.user.id;
 
-  // Filter messages between sender and receiver
-  const conversations = db.messages.filter(m => 
-    (m.sender_id === userId && m.receiver_id === receiverId) ||
-    (m.sender_id === receiverId && m.receiver_id === userId)
-  );
+  if (dbMode === 'supabase') {
+    try {
+      const { data: messages, error } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`and(sender_id.eq.${userId},receiver_id.eq.${receiverId}),and(sender_id.eq.${receiverId},receiver_id.eq.${userId})`)
+        .order('created_at', { ascending: true });
 
-  // Mark received messages as read
-  let updated = false;
-  db.messages = db.messages.map(m => {
-    if (m.sender_id === receiverId && m.receiver_id === userId && !m.is_read) {
-      updated = true;
-      return { ...m, is_read: true };
+      if (error) throw error;
+
+      // Mark received messages as read
+      await supabase
+        .from('messages')
+        .update({ is_read: true })
+        .eq('sender_id', receiverId)
+        .eq('receiver_id', userId)
+        .eq('is_read', false);
+
+      res.json(messages || []);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
-    return m;
-  });
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    const conversations = db.messages.filter(m => 
+      (m.sender_id === userId && m.receiver_id === receiverId) ||
+      (m.sender_id === receiverId && m.receiver_id === userId)
+    );
 
-  if (updated) {
-    writeDb(db);
+    let updated = false;
+    db.messages = db.messages.map(m => {
+      if (m.sender_id === receiverId && m.receiver_id === userId && !m.is_read) {
+        updated = true;
+        return { ...m, is_read: true };
+      }
+      return m;
+    });
+
+    if (updated) {
+      writeDb(db);
+    }
+
+    res.json(conversations);
   }
-
-  res.json(conversations);
 });
 
-app.post('/api/messages', authenticateToken, (req, res) => {
+app.post('/api/messages', authenticateToken, async (req, res) => {
   const { receiverId, content } = req.body;
   if (!receiverId || !content) return res.status(400).json({ error: 'receiverId and content are required' });
 
-  const db = readDb();
   const newMessage = {
     id: 'msg-' + Math.random().toString(36).substr(2, 9),
     sender_id: req.user.id,
@@ -391,34 +600,79 @@ app.post('/api/messages', authenticateToken, (req, res) => {
     created_at: new Date().toISOString()
   };
 
-  db.messages.push(newMessage);
-  writeDb(db);
-
-  res.json(newMessage);
+  if (dbMode === 'supabase') {
+    try {
+      const { error } = await supabase.from('messages').insert([newMessage]);
+      if (error) throw error;
+      res.json(newMessage);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    db.messages.push(newMessage);
+    writeDb(db);
+    res.json(newMessage);
+  }
 });
 
-app.get('/api/users', authenticateToken, (req, res) => {
-  const db = readDb();
+app.get('/api/users', authenticateToken, async (req, res) => {
   const userId = req.user.id;
 
-  // Map users with unread message counts
-  const usersWithCounts = db.users
-    .filter(u => u.id !== userId)
-    .map(u => {
-      const unreadCount = db.messages.filter(m => 
-        m.sender_id === u.id && m.receiver_id === userId && !m.is_read
-      ).length;
+  if (dbMode === 'supabase') {
+    try {
+      // Query profiles table
+      const { data: profiles, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .neq('id', userId);
 
-      return {
-        id: u.id,
-        email: u.email,
-        name: u.profile.name,
-        status: u.profile.status,
-        unread_count: unreadCount
-      };
-    });
+      if (error) throw error;
 
-  res.json(usersWithCounts);
+      // Query unread messages
+      const { data: unreadMsgs, error: msgsError } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('receiver_id', userId)
+        .eq('is_read', false);
+
+      const usersWithCounts = profiles.map(p => {
+        const unreadCount = unreadMsgs ? unreadMsgs.filter(m => m.sender_id === p.id).length : 0;
+        return {
+          id: p.id,
+          email: p.email,
+          name: p.name || p.email,
+          status: p.status || 'Member',
+          unread_count: unreadCount
+        };
+      });
+
+      res.json(usersWithCounts);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  } else {
+    // Local JSON DB Mode
+    const db = readDb();
+    const usersWithCounts = db.users
+      .filter(u => u.id !== userId)
+      .map(u => {
+        const unreadCount = db.messages.filter(m => 
+          m.sender_id === u.id && m.receiver_id === userId && !m.is_read
+        ).length;
+
+        return {
+          id: u.id,
+          email: u.email,
+          name: u.profile.name,
+          status: u.profile.status,
+          unread_count: unreadCount
+        };
+      });
+
+    res.json(usersWithCounts);
+  }
 });
 
 // Serve React static frontend in production
@@ -426,7 +680,6 @@ const buildPath = path.join(__dirname, '..', 'build');
 if (fs.existsSync(buildPath)) {
   app.use(express.static(buildPath));
   
-  // All non-API routes serve React index.html
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api/')) {
       res.sendFile(path.join(buildPath, 'index.html'));
@@ -434,6 +687,151 @@ if (fs.existsSync(buildPath)) {
   });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Express API Server listening on port ${PORT} on host 0.0.0.0`);
+// Wrap HTTP server for WebSockets
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ noServer: true });
+
+// Active socket connection map: userId -> WebSocket
+const clients = new Map();
+
+// Authentication on upgrade handshake
+server.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  const token = url.searchParams.get('token');
+
+  if (!token) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.userId = decoded.id;
+      ws.userEmail = decoded.email;
+      wss.emit('connection', ws, request);
+    });
+  });
 });
+
+wss.on('connection', (ws) => {
+  console.log(`[WS] Client registered: ${ws.userEmail} (ID: ${ws.userId})`);
+  clients.set(ws.userId, ws);
+
+  ws.send(JSON.stringify({ type: 'system', message: 'Connected to WebSocket server.' }));
+
+  ws.on('message', async (messageStr) => {
+    try {
+      const payload = JSON.parse(messageStr);
+
+      if (payload.type === 'chat') {
+        const { receiverId, content } = payload;
+        if (!receiverId || !content) return;
+
+        const msgId = 'msg-' + Math.random().toString(36).substr(2, 9);
+        const timestamp = new Date().toISOString();
+        
+        const savedMsg = {
+          id: msgId,
+          sender_id: ws.userId,
+          receiver_id: receiverId,
+          content,
+          is_read: false,
+          created_at: timestamp
+        };
+
+        // Save to active Database mode
+        if (dbMode === 'supabase') {
+          const { error } = await supabase.from('messages').insert([savedMsg]);
+          if (error) {
+            console.error('[WS] Error inserting to Supabase:', error.message);
+            ws.send(JSON.stringify({ type: 'error', error: 'Failed to send message' }));
+            return;
+          }
+        } else {
+          // Local mode
+          const db = readDb();
+          db.messages.push(savedMsg);
+          writeDb(db);
+        }
+
+        // Deliver message to receiver if online
+        const receiverSocket = clients.get(receiverId);
+        if (receiverSocket && receiverSocket.readyState === WebSocket.OPEN) {
+          receiverSocket.send(JSON.stringify({
+            type: 'chat',
+            message: savedMsg
+          }));
+
+          // Notify receiver to trigger an instantaneous sidebar refresh
+          receiverSocket.send(JSON.stringify({
+            type: 'unread_update',
+            senderId: ws.userId
+          }));
+        }
+
+        // Send confirmation back to sender
+        ws.send(JSON.stringify({
+          type: 'chat_confirm',
+          message: savedMsg
+        }));
+      }
+    } catch (err) {
+      console.error('[WS] Error processing message payload:', err.message);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log(`[WS] Client disconnected: ${ws.userEmail}`);
+    clients.delete(ws.userId);
+  });
+});
+
+// Self-healing database connection test before startup
+const testSupabaseConnection = async () => {
+  if (!supabase) return false;
+  try {
+    const { error } = await Promise.race([
+      supabase.from('profiles').select('id').limit(1),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+    ]);
+    if (error) {
+      console.warn('[DB] Supabase connectivity test failed:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('[DB] Supabase connection check timed out or errored:', err.message);
+    return false;
+  }
+};
+
+// Initialize server
+const init = async () => {
+  console.log('[DB] Running connection testing check...');
+  const isSupabaseOnline = await testSupabaseConnection();
+
+  if (isSupabaseOnline) {
+    dbMode = 'supabase';
+    console.log('>>> DB MODE STATUS: CONNECTED TO SUPABASE CLOUD DATABASE <<<');
+  } else {
+    dbMode = 'local';
+    console.log('>>> DB MODE STATUS: FALLBACK TO LOCAL JSON DOCUMENT DATABASE (db.json) <<<');
+  }
+
+  if (dbMode === 'local') {
+    seedUsers();
+  }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[SERVER] Ready. listening on port ${PORT} on host 0.0.0.0 in ${dbMode} mode`);
+  });
+};
+
+init();

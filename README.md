@@ -7,6 +7,7 @@ sdk: docker
 pinned: false
 ---
 
+
 # Alumni Connect Platform
 
 Alumni Connect is a premium, web-based networking portal designed to bridge the gap between alumni and current students of Easwari Engineering College (EEC). The platform facilitates real-time chat, job referrals, blog publication, event hosting, and features an integrated local ATS (Applicant Tracking System) resume analyzer.

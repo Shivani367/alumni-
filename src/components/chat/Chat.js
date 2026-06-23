@@ -14,6 +14,14 @@ function Chat() {
   const [user, setUser] = useState(null);
   const [isChatEmpty, setIsChatEmpty] = useState(false);
   const messagesEndRef = useRef(null);
+  
+  const socketRef = useRef(null);
+  const receiverIdRef = useRef(null);
+
+  // Keep receiverIdRef synced with state
+  useEffect(() => {
+    receiverIdRef.current = receiverId;
+  }, [receiverId]);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -36,7 +44,6 @@ function Chat() {
       if (!token) return;
 
       try {
-        // Fetch user from /api/users to find receiver info
         const response = await fetch(`${API_URL}/api/users`, {
           method: 'GET',
           headers: {
@@ -58,6 +65,7 @@ function Chat() {
     fetchReceiverProfile();
   }, [receiverId]);
 
+  // Fetch messages history via HTTP on selected user change
   const fetchMessages = async () => {
     if (!user?.id || !receiverId) return;
     const token = localStorage.getItem(TOKEN_KEY);
@@ -84,54 +92,115 @@ function Chat() {
 
   useEffect(() => {
     fetchMessages();
-
-    if (!user?.id || !receiverId) return;
-
-    // Poll for new messages every 3 seconds
-    const interval = setInterval(() => {
-      fetchMessages();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, [user?.id, receiverId]);
+
+  // Initialize persistent WebSocket Connection
+  useEffect(() => {
+    if (!user?.id) return;
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+
+    let socket;
+    let reconnectTimeout;
+
+    const connect = () => {
+      // Build socket URL dynamically matching current protocol
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      
+      let wsHost;
+      if (window.location.port === '3000') {
+        // Local Dev Setup
+        wsHost = 'localhost:5000';
+      } else {
+        // Production Server hosting
+        wsHost = window.location.host;
+      }
+      
+      const wsUrl = `${wsProtocol}//${wsHost}?token=${token}`;
+      console.log('[WS-Client] Initializing handshake with:', wsUrl);
+      
+      socket = new WebSocket(wsUrl);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        console.log('[WS-Client] WebSocket connected successfully.');
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+
+          if (payload.type === 'chat') {
+            const msg = payload.message;
+            const currentReceiverId = receiverIdRef.current;
+
+            // Display message only if conversation matches current open chat
+            if (msg.sender_id === currentReceiverId || msg.receiver_id === currentReceiverId) {
+              setMessages((prev) => {
+                if (prev.some(m => m.id === msg.id)) return prev;
+                return [...prev, msg];
+              });
+              setIsChatEmpty(false);
+            }
+          } else if (payload.type === 'chat_confirm') {
+            const msg = payload.message;
+            setMessages((prev) => {
+              if (prev.some(m => m.id === msg.id)) return prev;
+              return [...prev, msg];
+            });
+            setIsChatEmpty(false);
+          } else if (payload.type === 'unread_update') {
+            // Dispatch dynamic window event to notify UserList component immediately
+            window.dispatchEvent(new CustomEvent('alumni-chat-unread', {
+              detail: { senderId: payload.senderId }
+            }));
+          }
+        } catch (err) {
+          console.error('[WS-Client] Error handling message payload:', err);
+        }
+      };
+
+      socket.onclose = () => {
+        console.warn('[WS-Client] Connection closed. Attempting reconnect in 3s...');
+        reconnectTimeout = setTimeout(connect, 3000);
+      };
+
+      socket.onerror = (err) => {
+        console.error('[WS-Client] Socket connection error:', err);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (socket) {
+        socket.onclose = null; // Disable reconnect on manual unmount
+        socket.close();
+      }
+      clearTimeout(reconnectTimeout);
+    };
+  }, [user?.id]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSendMessage = async () => {
+  const handleSendMessage = () => {
     if (newMessage.trim() === '' || !user || !user.id || !receiverId) return;
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) return;
 
-    const messageContent = newMessage;
-    setNewMessage(''); // optimistic UI: clear immediately
+    const socket = socketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      const payload = {
+        type: 'chat',
+        receiverId,
+        content: newMessage.trim()
+      };
 
-    try {
-      const response = await fetch(`${API_URL}/api/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          receiverId,
-          content: messageContent
-        })
-      });
-
-      if (response.ok) {
-        const sentMsg = await response.json();
-        setMessages((prev) => [...prev, sentMsg]);
-        setIsChatEmpty(false);
-      } else {
-        // Revert message back to input if sending failed
-        setNewMessage(messageContent);
-      }
-    } catch (err) {
-      console.error('Error sending message:', err);
-      setNewMessage(messageContent);
+      socket.send(JSON.stringify(payload));
+      setNewMessage(''); // Clear input instantly
+    } else {
+      console.warn('[WS-Client] Socket connection is offline. Message not sent.');
     }
   };
 
@@ -183,7 +252,7 @@ function Chat() {
                           ? 'bg-teal-600 text-white rounded-br-none'
                           : 'bg-white text-slate-800 border border-slate-200 rounded-bl-none'
                       }`}>
-                        <p className="text-[15px] leading-relaxed break-words">{msg.content}</p>
+                      <p className="text-[15px] leading-relaxed break-words">{msg.content}</p>
                         <p className={`text-[10px] font-semibold mt-1 text-right ${
                           isSelf ? 'text-teal-200' : 'text-slate-400'
                         }`}>
